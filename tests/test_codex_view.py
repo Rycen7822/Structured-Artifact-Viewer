@@ -15,6 +15,7 @@ SCRIPT = ROOT / "scripts" / "codex_view.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import codex_view  # noqa: E402
+import structured_artifact_mcp  # noqa: E402
 
 
 class CodexViewTests(unittest.TestCase):
@@ -197,6 +198,43 @@ class CodexViewTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("parquet_magic_ok: true", r.stdout)
             self.assertIn("footer_length_bytes: 0", r.stdout)
+
+    def test_mcp_tool_summary_and_select(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "rows.jsonl"
+            p.write_text(json.dumps({"name": "a", "score": 1, "payload": "M" * 1000}) + "\n", encoding="utf-8")
+
+            summary = structured_artifact_mcp.call_tool(
+                "structured_artifact_viewer",
+                {"op": "summary", "args": {"path": str(p), "max_preview": 80}},
+            )
+            self.assertEqual(summary["status"], "ok")
+            self.assertIn("records_scanned", summary["output"])
+            self.assertNotIn("M" * 200, summary["output"])
+            self.assertIn("next", summary)
+
+            selected = structured_artifact_mcp.call_tool(
+                "structured_artifact_viewer",
+                {"op": "select", "args": {"path": str(p), "fields": ["name", "payload"], "limit": 1}},
+            )
+            self.assertEqual(selected["status"], "ok")
+            self.assertIn("skipped_large_fields", selected["output"])
+            self.assertNotIn("M" * 100, selected["output"])
+
+    def test_mcp_jsonrpc_smoke(self):
+        request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
+        response = structured_artifact_mcp.handle(request)
+        self.assertIsNotNone(response)
+        tools = response["result"]["tools"]
+        self.assertEqual(tools[0]["name"], "structured_artifact_viewer")
+        self.assertEqual(tools[0]["inputSchema"]["required"], ["op"])
+
+    def test_plugin_manifest_registers_mcp(self):
+        manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["mcpServers"], "./.mcp.json")
+        mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+        server = mcp["mcp_servers"]["structured-artifact-viewer"]
+        self.assertEqual(server["args"], ["./scripts/structured_artifact_mcp.py"])
 
 
 if __name__ == "__main__":

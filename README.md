@@ -1,6 +1,7 @@
 # Structured Artifact Viewer for Codex
 
-A local Codex plugin that reduces context waste when inspecting structured artifacts:
+A local Codex plugin that reduces context waste when inspecting unknown-size,
+large, generated, or high-output structured artifacts:
 
 - JSON
 - JSONL / NDJSON
@@ -10,33 +11,65 @@ A local Codex plugin that reduces context waste when inspecting structured artif
 
 It bundles:
 
-1. A compact CLI: `scripts/codex_view.py`
-2. A short Codex skill: `skills/structured-artifact-inspection/SKILL.md`
-3. An optional repo/user hook installer that blocks high-risk raw structured-file dumps.
+1. A single low-context MCP tool: `structured_artifact_viewer`
+2. A compact CLI fallback: `scripts/codex_view.py`
+3. A short Codex skill: `skills/structured-artifact-inspection/SKILL.md`
+4. An optional repo/user hook installer that blocks high-risk raw structured-file dumps.
 
 It is intentionally only a compact viewer. It is not a search tool, data
 transformation tool, validator, editor, or `jq` replacement. Use `jq` when you
 need exact JSON querying or transformation; use this plugin when the goal is to
 understand shape, sizes, keys, columns, and selected fields without raw dumps.
+For small known files, especially ordinary config files, direct reads are often
+simpler and cheaper.
 
 ## Plugin layout
 
 ```text
 structured-artifact-viewer/
   .codex-plugin/plugin.json
+  .mcp.json
+  bin/structured-artifact-mcp-server
   skills/structured-artifact-inspection/SKILL.md
   scripts/codex_view.py
+  scripts/structured_artifact_mcp.py
   tests/test_codex_view.py
   examples/marketplace.repo.example.json
 ```
 
-Codex plugin packaging requires `.codex-plugin/plugin.json`; skills live under `skills/`.
+Codex plugin packaging requires `.codex-plugin/plugin.json`; skills live under
+`skills/`; MCP server registration lives in `.mcp.json`.
+
+## MCP tool
+
+The plugin exposes one MCP tool to keep tool-list context small:
+
+```text
+structured_artifact_viewer
+```
+
+Input shape:
+
+```json
+{"op": "sniff|summary|select|self_check", "args": {"path": "FILE"}}
+```
+
+Examples:
+
+```json
+{"op": "summary", "args": {"path": "candidate_scores.jsonl"}}
+{"op": "select", "args": {"path": "candidate_scores.jsonl", "fields": ["name", "status", "score"], "limit": 10}}
+```
+
+The schema intentionally does not list every CLI flag. The stable path is:
+`sniff`, then `summary`, then `select`.
 
 ## Quick test without installing as a plugin
 
 ```bash
 python scripts/codex_view.py --help
 python scripts/codex_view.py install-command --scope repo
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' | python scripts/structured_artifact_mcp.py
 python scripts/codex_view.py sniff some_file.json
 python scripts/codex_view.py summary some_file.json
 python scripts/codex_view.py summary some_file.jsonl
@@ -65,7 +98,9 @@ Then restart Codex and install/enable the plugin from the repo marketplace.
 
 ## Optional hook guard
 
-The skill and CLI are the primary stable path. Hooks add enforcement but are version/config dependent. If your Codex version/config requires it, ensure `[features].codex_hooks = true`.
+The MCP tool and CLI are the primary stable paths. Hooks add enforcement but are
+version/config dependent. If your Codex version/config requires it, ensure
+`[features].codex_hooks = true`.
 
 After copying the plugin into a repository, run:
 
@@ -93,6 +128,10 @@ CODEX_VIEW_ALLOW_RAW=1 cat small.json
 # or add: # codex-view-allow-raw
 ```
 
-## Why this is not MCP
+## Why MCP plus CLI plus hook
 
-The problem is local file inspection, not remote integration. A local CLI plus skill is lighter and avoids extra MCP server context and startup complexity. The optional hook provides deterministic enforcement when supported by your Codex version/config.
+The MCP tool gives Codex a small, stable interface for bounded inspection
+without teaching it long CLI usage. The CLI remains useful for direct shell use
+and as a fallback when MCP is unavailable. The optional hook provides
+deterministic enforcement against accidental raw dumps when supported by your
+Codex version/config.

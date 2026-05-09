@@ -1,0 +1,9 @@
+{
+  "mcp_servers": {
+    "structured-artifact-viewer": {
+      "command": "python3",
+      "args": ["./scripts/structured_artifact_mcp.py"],
+      "cwd": "."
+    }
+  }
+}

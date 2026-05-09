@@ -1,17 +1,18 @@
 {
   "name": "structured-artifact-viewer",
-  "version": "0.1.1",
-  "description": "Bounded inspection for JSON, JSONL, CSV, TSV, Parquet metadata, and tool artifacts without raw dumps.",
+  "version": "0.2.0",
+  "description": "Bounded inspection for unknown-size, large, generated, or high-output structured artifacts.",
   "author": {
     "name": "Local plugin"
   },
   "license": "MIT",
   "keywords": ["codex", "context", "json", "jsonl", "csv", "artifact"],
   "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Structured Artifact Viewer",
-    "shortDescription": "Inspect structured artifacts without raw dumps.",
-    "longDescription": "Provides a compact local CLI and skill guidance for bounded inspection of JSON, JSONL, CSV, TSV, Parquet metadata, and generated tool artifact files. It summarizes shape and previews selected fields without replacing jq or other data-processing tools.",
+    "shortDescription": "Inspect high-output artifacts safely.",
+    "longDescription": "Provides a single low-context MCP tool, compact local CLI, and skill guidance for bounded inspection of unknown-size, large, generated, or high-output JSON, JSONL, CSV, TSV, Parquet metadata, and tool artifact files. It summarizes shape and previews selected fields without replacing jq or direct reads of small known config files.",
     "developerName": "Local plugin",
     "category": "Productivity",
     "capabilities": ["Read"]

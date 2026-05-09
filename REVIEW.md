@@ -2,7 +2,7 @@
 
 ## Scope
 
-This plugin packages a compact local CLI plus a short Codex skill. It targets bounded inspection of JSON, JSONL/NDJSON, CSV, TSV, Parquet metadata, and generated tool artifacts. It does not provide an MCP server and is not a `jq` replacement.
+This plugin packages a single low-context MCP tool, compact local CLI, optional hook guard, and short Codex skill. It targets bounded inspection of unknown-size, large, generated, or high-output JSON, JSONL/NDJSON, CSV, TSV, Parquet metadata, and generated tool artifacts. It is not a `jq` replacement and should not displace direct reads of small known config files.
 
 ## Review loop summary
 
@@ -67,6 +67,21 @@ Fix:
   data.
 - Removed YAML/YML from guarded structured suffixes.
 
+### Pass 6
+
+Issue found: with only a short skill plus CLI guidance, repeated skill loading
+could either be too terse to guide agents or too verbose and waste context.
+
+Fix:
+
+- Added a single MCP tool, `structured_artifact_viewer`, with a compact
+  `op + args` schema.
+- Kept the CLI as fallback and as the hook denial target.
+- Updated the skill to prefer MCP when available while keeping the plugin
+  explicitly inspection-only.
+- Added `.mcp.json` and an executable `bin/structured-artifact-mcp-server`
+  wrapper for plugin packaging.
+
 ## Known limits
 
 - Codex plugin-local hooks may vary by Codex version/config. The package therefore uses `install-hook` to write a repo/user hook with an absolute script path instead of relying on plugin-local hook discovery.
@@ -75,6 +90,8 @@ Fix:
 - JSONL projection skips oversize physical lines by default. Increase `--max-record-bytes` when intentionally inspecting large records.
 - Parquet schema/row-group details use optional `pyarrow` when available; the
   standard-library fallback reports footer/magic metadata only.
+- The MCP schema intentionally does not enumerate every CLI flag. Use `op:
+  sniff`, `op: summary`, and `op: select` as the stable interface.
 
 ## Test status
 
@@ -92,3 +109,4 @@ Validated with standard-library unittest tests covering:
 - generic `summary`/`select` dispatch
 - Parquet footer summary
 - YAML/YML guard exclusion
+- MCP `initialize`, `tools/list`, and `tools/call`

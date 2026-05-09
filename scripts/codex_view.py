@@ -19,7 +19,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-VERSION = "0.1.1"
+VERSION = "0.2.0"
 DEFAULT_MAX_LINES = 80
 DEFAULT_MAX_LINE_CHARS = 240
 DEFAULT_MAX_PREVIEW = 160
@@ -808,8 +808,8 @@ def cmd_guard(args: argparse.Namespace) -> int:
     if not risky:
         return 0
     message = (
-        f"Structured Artifact Viewer blocked {reason}. Use `codex-view summary FILE` "
-        f"or `codex-view select FILE --fields name,status,score --limit 10` instead. "
+        f"Structured Artifact Viewer blocked {reason}. Use MCP `structured_artifact_viewer` "
+        f"with `summary`/`select`, or CLI `codex-view summary FILE`. "
         f"Bypass only when intentional with CODEX_VIEW_ALLOW_RAW=1 or # codex-view-allow-raw."
     )
     if args.mode == "warn":
