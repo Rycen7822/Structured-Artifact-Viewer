@@ -51,39 +51,87 @@ metadata and previews, then select only the fields or records that matter.
 
 ## Install
 
-| Variant | Best For | Requirements |
+| Variant | Best for | Runtime requirements |
 | --- | --- | --- |
-| Repo-local Codex plugin | Normal project use from a copied plugin directory | Codex, Python 3 |
-| Python CLI / MCP | Editable local development and portable source installs | Python 3 |
-| Rust from source | Native CLI / MCP binaries and performance testing | Rust toolchain |
+| Rust prebuilt package | Normal use and distribution on supported Linux hosts | Linux x86_64 |
+| Python version | Editing or debugging the source implementation | Python 3.10+ |
+| Rust from source | Development and platform-specific builds | Rust toolchain |
 
-### Repo-Local Plugin
+### Rust Prebuilt Package
 
-From your repository root:
+Download the current Linux x86_64 package from the GitHub release:
 
 ```bash
 mkdir -p plugins
-cp -R /path/to/structured-artifact-viewer ./plugins/structured-artifact-viewer
+curl -L -o structured-artifact-viewer-v0.2.1-linux-x86_64.zip \
+  https://github.com/Rycen7822/Structured-Artifact-Viewer/releases/download/v0.2.1/structured-artifact-viewer-v0.2.1-linux-x86_64.zip
+unzip structured-artifact-viewer-v0.2.1-linux-x86_64.zip -d plugins
 mkdir -p .agents/plugins
-cp ./plugins/structured-artifact-viewer/examples/marketplace.repo.example.json .agents/plugins/marketplace.json
+cp plugins/structured-artifact-viewer/examples/marketplace.repo.example.json .agents/plugins/marketplace.json
 ```
 
 Then restart Codex and enable the plugin from the repo marketplace.
 
-### Python Version
+The prebuilt archive contains the Rust CLI and MCP server:
 
 ```bash
-python scripts/codex_view.py --help
-python scripts/codex_view.py summary some_file.jsonl
-python scripts/codex_view.py select some_file.jsonl --fields name,status,score --limit 10
-printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' | python scripts/structured_artifact_mcp.py
+plugins/structured-artifact-viewer/bin/codex-view --help
+plugins/structured-artifact-viewer/bin/structured-artifact-mcp-server
 ```
 
-### Rust Version
+Fallback direct MCP registration:
+
+```bash
+codex mcp add structured-artifact-viewer -- /absolute/path/to/plugins/structured-artifact-viewer/bin/structured-artifact-mcp-server
+```
+
+Optional shell tools:
+
+```bash
+export PATH="/absolute/path/to/plugins/structured-artifact-viewer/bin:$PATH"
+```
+
+### Python Version
+
+Use this path when you want the editable Python implementation or want to inspect
+the source plugin directly.
+
+```bash
+git clone https://github.com/Rycen7822/Structured-Artifact-Viewer.git
+cd Structured-Artifact-Viewer
+python3 scripts/codex_view.py --help
+```
+
+Install the source plugin into a project marketplace:
+
+```bash
+mkdir -p plugins
+cp -R /path/to/Structured-Artifact-Viewer plugins/structured-artifact-viewer
+mkdir -p .agents/plugins
+cp plugins/structured-artifact-viewer/examples/marketplace.repo.example.json .agents/plugins/marketplace.json
+```
+
+Fallback direct MCP registration:
+
+```bash
+codex mcp add structured-artifact-viewer -- python3 /absolute/path/to/structured-artifact-viewer/scripts/structured_artifact_mcp.py
+```
+
+Quick local checks:
+
+```bash
+python3 scripts/codex_view.py summary some_file.jsonl
+python3 scripts/codex_view.py select some_file.jsonl --fields name,status,score --limit 10
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' | python3 scripts/structured_artifact_mcp.py
+```
+
+### Rust From Source
+
+Build the Rust binaries locally:
 
 ```bash
 cd rust-version
-cargo build --release
+cargo build --release --bins
 target/release/codex-view --help
 target/release/codex-view summary ../some_file.jsonl
 target/release/structured-artifact-mcp-server
@@ -209,8 +257,8 @@ codex_hooks = true
 After copying the plugin into a repository, run:
 
 ```bash
-python plugins/structured-artifact-viewer/scripts/codex_view.py install-command --scope repo
-python plugins/structured-artifact-viewer/scripts/codex_view.py install-hook --scope repo --mode deny
+plugins/structured-artifact-viewer/bin/codex-view install-command --scope repo
+plugins/structured-artifact-viewer/bin/codex-view install-hook --scope repo --mode deny
 ```
 
 The hook blocks high-risk raw-output commands such as:
@@ -235,8 +283,9 @@ CODEX_VIEW_ALLOW_RAW=1 cat small.json
 | Path | Purpose |
 | --- | --- |
 | `.codex-plugin/plugin.json` | Codex plugin manifest and user-facing metadata. |
-| `.mcp.json` | MCP server registration for the single tool. |
-| `bin/structured-artifact-mcp-server` | Plugin entrypoint wrapper. |
+| `.mcp.json` | MCP server registration for the single tool. The source plugin uses Python; the prebuilt package points to the Rust binary. |
+| `bin/codex-view` | CLI entrypoint wrapper in source installs, Rust binary in prebuilt packages. |
+| `bin/structured-artifact-mcp-server` | MCP entrypoint wrapper in source installs, Rust binary in prebuilt packages. |
 | `skills/structured-artifact-inspection/SKILL.md` | Short Codex usage guidance. |
 | `scripts/codex_view.py` | Python CLI and core inspection logic. |
 | `scripts/structured_artifact_mcp.py` | Python MCP stdio server. |
