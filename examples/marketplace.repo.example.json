@@ -1,0 +1,20 @@
+{
+  "name": "local-repo-plugins",
+  "interface": {
+    "displayName": "Local Repo Plugins"
+  },
+  "plugins": [
+    {
+      "name": "structured-artifact-viewer",
+      "source": {
+        "source": "local",
+        "path": "./plugins/structured-artifact-viewer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

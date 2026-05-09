@@ -1,0 +1,19 @@
+{
+  "name": "structured-artifact-viewer",
+  "version": "0.1.0",
+  "description": "Compact JSON, JSONL, CSV, and TSV inspection for Codex without raw dumps.",
+  "author": {
+    "name": "Local plugin"
+  },
+  "license": "MIT",
+  "keywords": ["codex", "context", "json", "jsonl", "csv", "artifact"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Structured Artifact Viewer",
+    "shortDescription": "Summarize and project structured files without wasting context.",
+    "longDescription": "Provides a compact local CLI and skill guidance for inspecting JSON, JSONL, CSV, TSV, and tool artifact files. It avoids raw cat/head/sed dumps, truncates large fields, and can install an optional repo-level hook to block unsafe raw structured file reads.",
+    "developerName": "Local plugin",
+    "category": "Productivity",
+    "capabilities": ["Read"]
+  }
+}
