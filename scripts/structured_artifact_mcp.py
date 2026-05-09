@@ -22,7 +22,7 @@ PROTOCOL_VERSION = "2025-06-18"
 SERVER_INFO = {"name": "structured-artifact-viewer", "version": codex_view.VERSION}
 TOOL_NAME = "structured_artifact_viewer"
 OPS = {"sniff", "summary", "select", "self_check"}
-COMMON_ARGS = {"path", "file", "max_lines", "max_line_chars"}
+COMMON_ARGS = {"path", "file", "config", "max_lines", "max_line_chars"}
 OP_ARGS = {
     "sniff": {"line_check", "max_line_probe_bytes"},
     "summary": {

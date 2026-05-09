@@ -19,7 +19,12 @@ from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-VERSION = "0.2.0"
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised only on Python < 3.11
+    tomllib = None  # type: ignore[assignment]
+
+VERSION = "0.2.1"
 DEFAULT_MAX_LINES = 80
 DEFAULT_MAX_LINE_CHARS = 240
 DEFAULT_MAX_PREVIEW = 160
@@ -30,6 +35,10 @@ DEFAULT_SAMPLE_LIMIT = 10
 DEFAULT_MAX_LINE_PROBE_BYTES = 1 * 1024 * 1024
 DEFAULT_MAX_JSONL_RECORD_BYTES = 5 * 1024 * 1024
 DEFAULT_GUARD_ALLOW_SMALL_BYTES = 16 * 1024
+CONFIG_ENV = "STRUCTURED_ARTIFACT_VIEWER_CONFIG"
+CONFIG_ENV_COMPAT = "CODEX_VIEW_CONFIG"
+PROJECT_CONFIG_PATH = Path(".codex") / "structured-artifact-viewer.toml"
+USER_CONFIG_PATH = Path.home() / ".config" / "structured-artifact-viewer" / "config.toml"
 
 STRUCTURED_SUFFIXES = {
     ".json",
@@ -74,6 +83,199 @@ LARGE_FIELD_NAMES = {
 }
 RAW_TOOLS = {"cat", "head", "tail", "sed", "nl"}
 BYPASS_MARKERS = ("CODEX_VIEW_ALLOW_RAW=1", "codex-view-allow-raw")
+
+CONFIG_KEYS = {
+    "allow_small_bytes",
+    "limit",
+    "line_check",
+    "max_chars",
+    "max_columns",
+    "max_file_bytes",
+    "max_keys",
+    "max_line_chars",
+    "max_line_probe_bytes",
+    "max_lines",
+    "max_preview",
+    "max_record_bytes",
+    "sample",
+    "scan",
+}
+CONFIG_ALIASES = {
+    "guard_allow_small_bytes": "allow_small_bytes",
+    "jsonl_line_check": "line_check",
+    "jsonl_scan": "scan",
+    "max_json_bytes": "max_file_bytes",
+    "max_jsonl_record_bytes": "max_record_bytes",
+    "sample_limit": "limit",
+}
+CONFIG_SECTIONS = {"budget", "guard"}
+
+
+class ConfigError(Exception):
+    pass
+
+
+def strip_inline_comment(line: str) -> str:
+    in_quote = False
+    quote = ""
+    escaped = False
+    out = []
+    for ch in line:
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if ch == "\\" and in_quote:
+            out.append(ch)
+            escaped = True
+            continue
+        if ch in {"'", '"'}:
+            if in_quote and ch == quote:
+                in_quote = False
+                quote = ""
+            elif not in_quote:
+                in_quote = True
+                quote = ch
+            out.append(ch)
+            continue
+        if ch == "#" and not in_quote:
+            break
+        out.append(ch)
+    return "".join(out).strip()
+
+
+def parse_basic_toml(text: str, path: Path) -> dict[str, Any]:
+    """Parse the small TOML subset used for budget files on Python < 3.11."""
+    data: dict[str, Any] = {}
+    current: dict[str, Any] = data
+    for line_no, raw in enumerate(text.splitlines(), 1):
+        line = strip_inline_comment(raw)
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip()
+            if not section:
+                raise ConfigError(f"{path}:{line_no}: empty TOML section")
+            current = data.setdefault(section, {})
+            if not isinstance(current, dict):
+                raise ConfigError(f"{path}:{line_no}: section conflicts with scalar key")
+            continue
+        if "=" not in line:
+            raise ConfigError(f"{path}:{line_no}: expected key = value")
+        key, raw_value = [part.strip() for part in line.split("=", 1)]
+        if not key:
+            raise ConfigError(f"{path}:{line_no}: empty key")
+        if raw_value.lower() in {"true", "false"}:
+            value: Any = raw_value.lower() == "true"
+        elif (raw_value.startswith('"') and raw_value.endswith('"')) or (raw_value.startswith("'") and raw_value.endswith("'")):
+            value = raw_value[1:-1]
+        else:
+            try:
+                value = int(raw_value.replace("_", ""))
+            except ValueError as exc:
+                raise ConfigError(f"{path}:{line_no}: unsupported value {raw_value!r}") from exc
+        current[key] = value
+    return data
+
+
+def read_config_file(path: Path) -> dict[str, Any]:
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ConfigError(f"cannot read config {path}: {exc}") from exc
+    try:
+        if path.suffix.lower() == ".json":
+            parsed = json.loads(raw.decode("utf-8"))
+        elif tomllib is not None:
+            parsed = tomllib.loads(raw.decode("utf-8"))
+        else:
+            parsed = parse_basic_toml(raw.decode("utf-8"), path)
+    except ConfigError:
+        raise
+    except Exception as exc:
+        raise ConfigError(f"cannot parse config {path}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ConfigError(f"config {path} must contain an object/table")
+    return parsed
+
+
+def normalize_config_key(key: str) -> str:
+    normalized = key.strip().replace("-", "_")
+    return CONFIG_ALIASES.get(normalized, normalized)
+
+
+def collect_config_values(raw: Mapping[str, Any], path: Path) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for section, body in raw.items():
+        if section in CONFIG_SECTIONS:
+            if not isinstance(body, Mapping):
+                raise ConfigError(f"config {path} section [{section}] must be a table")
+            items = body.items()
+        else:
+            items = [(section, body)]
+        for raw_key, raw_value in items:
+            key = normalize_config_key(str(raw_key))
+            if key not in CONFIG_KEYS:
+                raise ConfigError(f"config {path} has unsupported key: {raw_key}")
+            if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+                raise ConfigError(f"config {path} key {raw_key} must be an integer")
+            if raw_value < 0:
+                raise ConfigError(f"config {path} key {raw_key} must be >= 0")
+            if key != "allow_small_bytes" and raw_value == 0:
+                raise ConfigError(f"config {path} key {raw_key} must be > 0")
+            values[key] = raw_value
+    return values
+
+
+def extract_config_arg(argv: Sequence[str]) -> tuple[str | None, list[str]]:
+    config_path: str | None = None
+    cleaned: list[str] = []
+    i = 0
+    while i < len(argv):
+        item = argv[i]
+        if item == "--config":
+            if i + 1 >= len(argv):
+                raise ConfigError("--config requires a path")
+            config_path = argv[i + 1]
+            i += 2
+            continue
+        if item.startswith("--config="):
+            config_path = item.split("=", 1)[1]
+            if not config_path:
+                raise ConfigError("--config requires a path")
+            i += 1
+            continue
+        cleaned.append(item)
+        i += 1
+    return config_path, cleaned
+
+
+def candidate_config_paths(explicit_config: str | None) -> list[tuple[Path, bool]]:
+    env_path = os.environ.get(CONFIG_ENV) or os.environ.get(CONFIG_ENV_COMPAT)
+    paths: list[tuple[Path, bool]] = [
+        (USER_CONFIG_PATH, False),
+        (find_repo_root(Path.cwd()) / PROJECT_CONFIG_PATH, False),
+    ]
+    if env_path:
+        paths.append((Path(env_path).expanduser(), True))
+    if explicit_config:
+        paths.append((Path(explicit_config).expanduser(), True))
+    return paths
+
+
+def load_config_defaults(explicit_config: str | None) -> dict[str, int]:
+    values: dict[str, int] = {}
+    for path, required in candidate_config_paths(explicit_config):
+        if not path.exists():
+            if required:
+                raise ConfigError(f"config not found: {path}")
+            continue
+        values.update(collect_config_values(read_config_file(path), path))
+    return values
+
+
+def cfg(config: Mapping[str, int], key: str, fallback: int) -> int:
+    return int(config.get(key, fallback))
 
 
 class OutputBudget:
@@ -831,7 +1033,8 @@ def merge_hooks(existing: dict[str, Any], command: str, mode: str) -> dict[str, 
     if not isinstance(pre, list):
         raise SystemExit("existing hooks.PreToolUse is not a list; refusing to modify")
     marker = "structured-artifact-viewer"
-    hook_cmd = f'{shlex.quote(sys.executable)} {shlex.quote(command)} guard --mode {shlex.quote(mode)} --allow-small-bytes {DEFAULT_GUARD_ALLOW_SMALL_BYTES}'
+    # Do not bake budget values into the hook command; runtime config should be able to tune them.
+    hook_cmd = f'{shlex.quote(sys.executable)} {shlex.quote(command)} guard --mode {shlex.quote(mode)}'
     entry = {
         "matcher": "Bash",
         "hooks": [
@@ -924,117 +1127,119 @@ def find_repo_root(start: Path) -> Path:
     return cur
 
 
-def add_common_output_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--max-lines", type=int, default=DEFAULT_MAX_LINES)
-    parser.add_argument("--max-line-chars", type=int, default=DEFAULT_MAX_LINE_CHARS)
+def add_common_output_args(parser: argparse.ArgumentParser, config: Mapping[str, int]) -> None:
+    parser.add_argument("--max-lines", type=int, default=cfg(config, "max_lines", DEFAULT_MAX_LINES))
+    parser.add_argument("--max-line-chars", type=int, default=cfg(config, "max_line_chars", DEFAULT_MAX_LINE_CHARS))
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(config: Mapping[str, int] | None = None) -> argparse.ArgumentParser:
+    config = config or {}
     p = argparse.ArgumentParser(prog="codex_view.py", description="Compact structured artifact inspection for Codex")
+    p.add_argument("--config", help="Load default budget values from a TOML or JSON config file")
     p.add_argument("--version", action="version", version=VERSION)
     sub = p.add_subparsers(dest="command", required=True)
 
     sp = sub.add_parser("sniff", help="Print bounded file size/type and initial line lengths")
     sp.add_argument("file")
-    sp.add_argument("--line-check", type=int, default=DEFAULT_JSONL_LINE_CHECK)
-    sp.add_argument("--max-line-probe-bytes", type=int, default=DEFAULT_MAX_LINE_PROBE_BYTES)
-    add_common_output_args(sp)
+    sp.add_argument("--line-check", type=int, default=cfg(config, "line_check", DEFAULT_JSONL_LINE_CHECK))
+    sp.add_argument("--max-line-probe-bytes", type=int, default=cfg(config, "max_line_probe_bytes", DEFAULT_MAX_LINE_PROBE_BYTES))
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_sniff)
 
     sp = sub.add_parser("summary", help="Auto-summarize JSON, JSONL, CSV/TSV, or Parquet metadata")
     sp.add_argument("file")
     sp.add_argument("--delimiter")
-    sp.add_argument("--scan", type=int, default=DEFAULT_JSONL_SCAN)
-    sp.add_argument("--sample", type=int, default=5)
-    sp.add_argument("--line-check", type=int, default=DEFAULT_JSONL_LINE_CHECK)
-    sp.add_argument("--max-line-probe-bytes", type=int, default=DEFAULT_MAX_LINE_PROBE_BYTES)
-    sp.add_argument("--max-record-bytes", type=int, default=DEFAULT_MAX_JSONL_RECORD_BYTES)
-    sp.add_argument("--max-preview", type=int, default=DEFAULT_MAX_PREVIEW)
-    sp.add_argument("--max-keys", type=int, default=60)
-    sp.add_argument("--max-columns", type=int, default=40)
-    sp.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_JSON_BYTES)
+    sp.add_argument("--scan", type=int, default=cfg(config, "scan", DEFAULT_JSONL_SCAN))
+    sp.add_argument("--sample", type=int, default=cfg(config, "sample", 5))
+    sp.add_argument("--line-check", type=int, default=cfg(config, "line_check", DEFAULT_JSONL_LINE_CHECK))
+    sp.add_argument("--max-line-probe-bytes", type=int, default=cfg(config, "max_line_probe_bytes", DEFAULT_MAX_LINE_PROBE_BYTES))
+    sp.add_argument("--max-record-bytes", type=int, default=cfg(config, "max_record_bytes", DEFAULT_MAX_JSONL_RECORD_BYTES))
+    sp.add_argument("--max-preview", type=int, default=cfg(config, "max_preview", DEFAULT_MAX_PREVIEW))
+    sp.add_argument("--max-keys", type=int, default=cfg(config, "max_keys", 60))
+    sp.add_argument("--max-columns", type=int, default=cfg(config, "max_columns", 40))
+    sp.add_argument("--max-file-bytes", type=int, default=cfg(config, "max_file_bytes", DEFAULT_MAX_JSON_BYTES))
     sp.add_argument("--force", action="store_true")
-    add_common_output_args(sp)
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_summary)
 
     sp = sub.add_parser("select", help="Preview selected fields from JSON, JSONL, CSV, or TSV")
     sp.add_argument("file")
     sp.add_argument("--fields", required=True, help="comma-separated field names; dotted JSON paths are supported")
     sp.add_argument("--delimiter")
-    sp.add_argument("--limit", type=int, default=DEFAULT_SAMPLE_LIMIT)
-    sp.add_argument("--max-chars", type=int, default=DEFAULT_MAX_PREVIEW)
-    sp.add_argument("--max-record-bytes", type=int, default=DEFAULT_MAX_JSONL_RECORD_BYTES)
-    sp.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_JSON_BYTES)
+    sp.add_argument("--limit", type=int, default=cfg(config, "limit", DEFAULT_SAMPLE_LIMIT))
+    sp.add_argument("--max-chars", type=int, default=cfg(config, "max_chars", DEFAULT_MAX_PREVIEW))
+    sp.add_argument("--max-record-bytes", type=int, default=cfg(config, "max_record_bytes", DEFAULT_MAX_JSONL_RECORD_BYTES))
+    sp.add_argument("--max-file-bytes", type=int, default=cfg(config, "max_file_bytes", DEFAULT_MAX_JSON_BYTES))
     sp.add_argument("--force", action="store_true")
     sp.add_argument("--include-large-fields", action="store_true")
     sp.add_argument("--include-empty", action="store_true")
     sp.add_argument("--as-json", action="store_true")
-    add_common_output_args(sp)
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_select)
 
     sp = sub.add_parser("json-summary", help="Summarize JSON top-level structure without full dump")
     sp.add_argument("file")
-    sp.add_argument("--max-preview", type=int, default=DEFAULT_MAX_PREVIEW)
-    sp.add_argument("--max-keys", type=int, default=40)
-    sp.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_JSON_BYTES)
+    sp.add_argument("--max-preview", type=int, default=cfg(config, "max_preview", DEFAULT_MAX_PREVIEW))
+    sp.add_argument("--max-keys", type=int, default=cfg(config, "max_keys", 40))
+    sp.add_argument("--max-file-bytes", type=int, default=cfg(config, "max_file_bytes", DEFAULT_MAX_JSON_BYTES))
     sp.add_argument("--force", action="store_true")
-    add_common_output_args(sp)
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_json_summary)
 
     sp = sub.add_parser("jsonl-summary", help="Summarize JSONL keys, field lengths, and samples")
     sp.add_argument("file")
-    sp.add_argument("--scan", type=int, default=DEFAULT_JSONL_SCAN)
-    sp.add_argument("--line-check", type=int, default=DEFAULT_JSONL_LINE_CHECK)
-    sp.add_argument("--max-line-probe-bytes", type=int, default=DEFAULT_MAX_LINE_PROBE_BYTES)
-    sp.add_argument("--max-record-bytes", type=int, default=DEFAULT_MAX_JSONL_RECORD_BYTES)
-    sp.add_argument("--max-preview", type=int, default=120)
-    sp.add_argument("--max-keys", type=int, default=60)
-    add_common_output_args(sp)
+    sp.add_argument("--scan", type=int, default=cfg(config, "scan", DEFAULT_JSONL_SCAN))
+    sp.add_argument("--line-check", type=int, default=cfg(config, "line_check", DEFAULT_JSONL_LINE_CHECK))
+    sp.add_argument("--max-line-probe-bytes", type=int, default=cfg(config, "max_line_probe_bytes", DEFAULT_MAX_LINE_PROBE_BYTES))
+    sp.add_argument("--max-record-bytes", type=int, default=cfg(config, "max_record_bytes", DEFAULT_MAX_JSONL_RECORD_BYTES))
+    sp.add_argument("--max-preview", type=int, default=cfg(config, "max_preview", 120))
+    sp.add_argument("--max-keys", type=int, default=cfg(config, "max_keys", 60))
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_jsonl_summary)
 
     sp = sub.add_parser("jsonl-project", help="Project selected JSONL fields with truncation")
     sp.add_argument("file")
     sp.add_argument("--fields", required=True, help="comma-separated field names; dotted paths are supported")
-    sp.add_argument("--limit", type=int, default=DEFAULT_SAMPLE_LIMIT)
-    sp.add_argument("--max-chars", type=int, default=DEFAULT_MAX_PREVIEW)
-    sp.add_argument("--max-record-bytes", type=int, default=DEFAULT_MAX_JSONL_RECORD_BYTES)
+    sp.add_argument("--limit", type=int, default=cfg(config, "limit", DEFAULT_SAMPLE_LIMIT))
+    sp.add_argument("--max-chars", type=int, default=cfg(config, "max_chars", DEFAULT_MAX_PREVIEW))
+    sp.add_argument("--max-record-bytes", type=int, default=cfg(config, "max_record_bytes", DEFAULT_MAX_JSONL_RECORD_BYTES))
     sp.add_argument("--include-large-fields", action="store_true")
     sp.add_argument("--include-empty", action="store_true")
     sp.add_argument("--as-json", action="store_true")
-    add_common_output_args(sp)
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_jsonl_project)
 
     sp = sub.add_parser("csv-summary", help="Summarize CSV/TSV headers and column samples")
     sp.add_argument("file")
     sp.add_argument("--delimiter")
-    sp.add_argument("--scan", type=int, default=1000)
-    sp.add_argument("--sample", type=int, default=5)
-    sp.add_argument("--max-preview", type=int, default=DEFAULT_MAX_PREVIEW)
-    sp.add_argument("--max-columns", type=int, default=40)
-    add_common_output_args(sp)
+    sp.add_argument("--scan", type=int, default=cfg(config, "scan", 1000))
+    sp.add_argument("--sample", type=int, default=cfg(config, "sample", 5))
+    sp.add_argument("--max-preview", type=int, default=cfg(config, "max_preview", DEFAULT_MAX_PREVIEW))
+    sp.add_argument("--max-columns", type=int, default=cfg(config, "max_columns", 40))
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_csv_summary)
 
     sp = sub.add_parser("csv-project", help="Project selected CSV/TSV columns with truncation")
     sp.add_argument("file")
     sp.add_argument("--fields", required=True)
     sp.add_argument("--delimiter")
-    sp.add_argument("--limit", type=int, default=DEFAULT_SAMPLE_LIMIT)
-    sp.add_argument("--max-chars", type=int, default=DEFAULT_MAX_PREVIEW)
+    sp.add_argument("--limit", type=int, default=cfg(config, "limit", DEFAULT_SAMPLE_LIMIT))
+    sp.add_argument("--max-chars", type=int, default=cfg(config, "max_chars", DEFAULT_MAX_PREVIEW))
     sp.add_argument("--include-large-fields", action="store_true")
     sp.add_argument("--as-json", action="store_true")
-    add_common_output_args(sp)
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_csv_project)
 
     sp = sub.add_parser("parquet-summary", help="Summarize Parquet footer/schema metadata without reading rows")
     sp.add_argument("file")
-    sp.add_argument("--max-preview", type=int, default=DEFAULT_MAX_PREVIEW)
-    sp.add_argument("--max-columns", type=int, default=40)
-    add_common_output_args(sp)
+    sp.add_argument("--max-preview", type=int, default=cfg(config, "max_preview", DEFAULT_MAX_PREVIEW))
+    sp.add_argument("--max-columns", type=int, default=cfg(config, "max_columns", 40))
+    add_common_output_args(sp, config)
     sp.set_defaults(func=cmd_parquet_summary)
 
     sp = sub.add_parser("guard", help="PreToolUse hook guard; reads Codex hook JSON on stdin")
     sp.add_argument("--mode", choices=["deny", "warn"], default="deny")
-    sp.add_argument("--allow-small-bytes", type=int, default=DEFAULT_GUARD_ALLOW_SMALL_BYTES)
+    sp.add_argument("--allow-small-bytes", type=int, default=cfg(config, "allow_small_bytes", DEFAULT_GUARD_ALLOW_SMALL_BYTES))
     sp.add_argument("--debug", action="store_true")
     sp.set_defaults(func=cmd_guard)
 
@@ -1051,8 +1256,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    try:
+        explicit_config, cleaned_argv = extract_config_arg(argv_list)
+        config = {} if any(arg in {"-h", "--help", "--version"} for arg in cleaned_argv) else load_config_defaults(explicit_config)
+    except ConfigError as exc:
+        eprint(f"config error: {exc}")
+        return 2
+    parser = build_parser(config)
+    args = parser.parse_args(cleaned_argv)
     return int(args.func(args))
 
 

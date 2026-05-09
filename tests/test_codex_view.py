@@ -19,10 +19,11 @@ import structured_artifact_mcp  # noqa: E402
 
 
 class CodexViewTests(unittest.TestCase):
-    def run_cli(self, *args):
+    def run_cli(self, *args, cwd=None, env=None):
         return subprocess.run(
             [sys.executable, str(SCRIPT), *args],
-            cwd=str(ROOT),
+            cwd=str(cwd or ROOT),
+            env=env,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -109,6 +110,8 @@ class CodexViewTests(unittest.TestCase):
         entries = m2["hooks"]["PreToolUse"]
         managed = [x for x in entries if isinstance(x, dict) and x.get("_managedBy") == "structured-artifact-viewer"]
         self.assertEqual(len(managed), 1)
+        command = managed[0]["hooks"][0]["command"]
+        self.assertNotIn("--allow-small-bytes", command)
 
     def test_install_command_wrapper_works(self):
         with tempfile.TemporaryDirectory() as td:
@@ -235,6 +238,56 @@ class CodexViewTests(unittest.TestCase):
         mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
         server = mcp["mcp_servers"]["structured-artifact-viewer"]
         self.assertEqual(server["args"], ["./scripts/structured_artifact_mcp.py"])
+
+    def test_config_file_sets_defaults_and_cli_overrides(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config = root / "viewer.toml"
+            config.write_text("[budget]\nscan = 1\nmax_lines = 12\n", encoding="utf-8")
+            rows = root / "rows.jsonl"
+            rows.write_text(
+                json.dumps({"name": "a", "score": 1}) + "\n" + json.dumps({"name": "b", "score": 2}) + "\n",
+                encoding="utf-8",
+            )
+
+            r = self.run_cli("--config", str(config), "jsonl-summary", str(rows))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("records_scanned: 1+", r.stdout)
+
+            r = self.run_cli("--config", str(config), "jsonl-summary", str(rows), "--scan", "2")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("records_scanned: 2", r.stdout)
+
+    def test_project_config_and_mcp_args_config(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / ".git").mkdir()
+            (root / ".codex").mkdir()
+            (root / ".codex" / "structured-artifact-viewer.toml").write_text(
+                "[budget]\nlimit = 1\nmax_chars = 8\n",
+                encoding="utf-8",
+            )
+            rows = root / "rows.jsonl"
+            rows.write_text(
+                json.dumps({"name": "abcdefghi", "score": 1}) + "\n"
+                + json.dumps({"name": "second", "score": 2}) + "\n",
+                encoding="utf-8",
+            )
+
+            r = self.run_cli("jsonl-project", str(rows), "--fields", "name", cwd=root)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("abcde...", r.stdout)
+            self.assertNotIn("second", r.stdout)
+
+            config = root / "explicit.toml"
+            config.write_text("[budget]\nlimit = 1\n", encoding="utf-8")
+            selected = structured_artifact_mcp.call_tool(
+                "structured_artifact_viewer",
+                {"op": "select", "args": {"path": str(rows), "fields": ["name"], "config": str(config)}},
+            )
+            self.assertEqual(selected["status"], "ok")
+            self.assertIn("abcdefghi", selected["output"])
+            self.assertNotIn("second", selected["output"])
 
 
 if __name__ == "__main__":

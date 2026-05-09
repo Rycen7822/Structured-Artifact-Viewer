@@ -1,6 +1,6 @@
 {
   "name": "structured-artifact-viewer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Bounded inspection for unknown-size, large, generated, or high-output structured artifacts.",
   "author": {
     "name": "Local plugin"

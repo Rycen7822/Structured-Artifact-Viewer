@@ -64,10 +64,47 @@ Examples:
 The schema intentionally does not list every CLI flag. The stable path is:
 `sniff`, then `summary`, then `select`.
 
+## Budget configuration
+
+The CLI and MCP server can load default limit values from external config files.
+Command-line flags still have the highest priority.
+
+Priority:
+
+```text
+CLI flags > --config FILE / MCP args.config > STRUCTURED_ARTIFACT_VIEWER_CONFIG > .codex/structured-artifact-viewer.toml > ~/.config/structured-artifact-viewer/config.toml > built-in defaults
+```
+
+Example:
+
+```toml
+[budget]
+max_lines = 80
+max_line_chars = 240
+max_preview = 160
+max_file_bytes = 52428800
+scan = 1000
+sample = 5
+line_check = 20
+limit = 10
+max_line_probe_bytes = 1048576
+max_record_bytes = 5242880
+max_keys = 60
+max_columns = 40
+
+[guard]
+allow_small_bytes = 16384
+```
+
+The config is intentionally limited to budget values. It does not enable
+`--force` or other behavior-changing flags. JSON config files are also
+accepted; TOML is the recommended format.
+
 ## Quick test without installing as a plugin
 
 ```bash
 python scripts/codex_view.py --help
+python scripts/codex_view.py --config .codex/structured-artifact-viewer.toml summary some_file.jsonl
 python scripts/codex_view.py install-command --scope repo
 printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' | python scripts/structured_artifact_mcp.py
 python scripts/codex_view.py sniff some_file.json

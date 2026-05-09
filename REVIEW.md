@@ -82,10 +82,28 @@ Fix:
 - Added `.mcp.json` and an executable `bin/structured-artifact-mcp-server`
   wrapper for plugin packaging.
 
+### Pass 7
+
+Issue found: after prebuilt or plugin installation, users could override budget
+values only by passing CLI/MCP arguments on every call.
+
+Fix:
+
+- Added external budget config loading for the Python CLI.
+- Supported user, project, environment, and explicit config paths with priority
+  below CLI flags.
+- Kept config limited to numeric budget defaults so it cannot silently enable
+  `--force` or turn the viewer into a raw dump path.
+- Reused the same config path through MCP because the MCP wrapper delegates to
+  the CLI parser.
+
 ## Known limits
 
 - Codex plugin-local hooks may vary by Codex version/config. The package therefore uses `install-hook` to write a repo/user hook with an absolute script path instead of relying on plugin-local hook discovery.
 - The hook is a guardrail, not a security boundary. Codex hooks do not intercept every possible shell or tool path in every runtime.
+- Project config lookup is based on the Python process working directory. For
+  plugin hosts that start MCP from another directory, use
+  `STRUCTURED_ARTIFACT_VIEWER_CONFIG` or an explicit MCP `config` arg.
 - JSON files larger than the default `--max-file-bytes` are refused unless `--force` is passed. This avoids accidental giant `json.load()` calls.
 - JSONL projection skips oversize physical lines by default. Increase `--max-record-bytes` when intentionally inspecting large records.
 - Parquet schema/row-group details use optional `pyarrow` when available; the
@@ -110,3 +128,4 @@ Validated with standard-library unittest tests covering:
 - Parquet footer summary
 - YAML/YML guard exclusion
 - MCP `initialize`, `tools/list`, and `tools/call`
+- external budget config defaults and CLI override priority
