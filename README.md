@@ -65,19 +65,19 @@ plugin for itself.
 Rust prebuilt package, recommended for normal Linux x86_64 use:
 
 ```text
-Install Structured Artifact Viewer for yourself globally using the Rust prebuilt package `structured-artifact-viewer-v0.2.1-linux-x86_64.zip` from the v0.2.1 GitHub release. Put it under `~/.codex/plugins/structured-artifact-viewer`, enable `structured-artifact-viewer@local-personal`, register MCP `structured-artifact-viewer` to `~/.codex/plugins/structured-artifact-viewer/bin/structured-artifact-mcp-server`, and verify with `codex-view --help`, `codex mcp list`, and MCP `self_check`.
+Install Structured Artifact Viewer for yourself globally from repo `https://github.com/Rycen7822/Structured-Artifact-Viewer`. Use the Rust prebuilt asset `https://github.com/Rycen7822/Structured-Artifact-Viewer/releases/download/v0.2.1/structured-artifact-viewer-v0.2.1-linux-x86_64.zip`, install it under `~/.codex/plugins/structured-artifact-viewer`, enable `structured-artifact-viewer@local-personal`, register MCP `structured-artifact-viewer` to `~/.codex/plugins/structured-artifact-viewer/bin/structured-artifact-mcp-server`, and verify with `codex-view --help`, `codex mcp list`, and MCP `self_check`.
 ```
 
 Python version, for editing or debugging the source implementation:
 
 ```text
-Install the Python/source version of Structured Artifact Viewer for yourself, not the Rust prebuilt package. Put it under `~/.codex/plugins/structured-artifact-viewer`, register MCP `structured-artifact-viewer` with `python3 ~/.codex/plugins/structured-artifact-viewer/scripts/structured_artifact_mcp.py`, and verify the Python CLI/MCP path.
+Install the Python/source version of Structured Artifact Viewer for yourself from repo `https://github.com/Rycen7822/Structured-Artifact-Viewer`, not the Rust prebuilt package. Put the source tree under `~/.codex/plugins/structured-artifact-viewer`, register MCP `structured-artifact-viewer` with `python3 ~/.codex/plugins/structured-artifact-viewer/scripts/structured_artifact_mcp.py`, and verify the Python CLI/MCP path.
 ```
 
 Rust from source, for platform-specific builds:
 
 ```text
-Build Structured Artifact Viewer from source for your platform with `cd rust-version && cargo build --release --bins`, install the resulting `codex-view` and `structured-artifact-mcp-server` under `~/.codex/plugins/structured-artifact-viewer/bin`, then register the Rust MCP binary and verify.
+Build Structured Artifact Viewer from source for your platform by cloning `https://github.com/Rycen7822/Structured-Artifact-Viewer`, then running `cd rust-version && cargo build --release --bins`. Install the resulting `codex-view` and `structured-artifact-mcp-server` under `~/.codex/plugins/structured-artifact-viewer/bin`, register the Rust MCP binary, and verify.
 ```
 
 ### Rust Prebuilt Package
