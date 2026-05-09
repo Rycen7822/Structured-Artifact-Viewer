@@ -3,6 +3,7 @@ import io
 import json
 import os
 import subprocess
+import struct
 import sys
 import tempfile
 import unittest
@@ -157,6 +158,45 @@ class CodexViewTests(unittest.TestCase):
             self.assertIn("oversize_records_skipped", r.stdout)
             self.assertIn("name", r.stdout)
             self.assertNotIn("Z" * 100, r.stdout)
+
+    def test_generic_summary_and_select_dispatch(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            json_path = root / "summary.json"
+            json_path.write_text(json.dumps({"name": "demo", "payload": "P" * 1000, "nested": {"score": 3}}), encoding="utf-8")
+            jsonl_path = root / "rows.jsonl"
+            jsonl_path.write_text(json.dumps({"name": "a", "score": 1, "source": "S" * 1000}) + "\n", encoding="utf-8")
+            csv_path = root / "rows.csv"
+            csv_path.write_text("name,score,logs\na,1," + "L" * 1000 + "\n", encoding="utf-8")
+
+            r = self.run_cli("summary", str(jsonl_path))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("records_scanned", r.stdout)
+            self.assertNotIn("S" * 200, r.stdout)
+
+            r = self.run_cli("select", str(json_path), "--fields", "name,payload,nested.score")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("skipped_large_fields", r.stdout)
+            self.assertIn("nested.score", r.stdout)
+            self.assertNotIn("P" * 100, r.stdout)
+
+            r = self.run_cli("select", str(csv_path), "--fields", "name,score,logs")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("skipped_large_fields", r.stdout)
+            self.assertNotIn("L" * 100, r.stdout)
+
+    def test_yaml_is_not_guarded_as_structured_artifact(self):
+        self.assertFalse(codex_view.dangerous_raw_structured_command("cat config.yml")[0])
+        self.assertFalse(codex_view.dangerous_raw_structured_command("cat config.yaml")[0])
+
+    def test_parquet_summary_reads_footer_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "sample.parquet"
+            p.write_bytes(b"PAR1" + struct.pack("<I", 0) + b"PAR1")
+            r = self.run_cli("parquet-summary", str(p))
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("parquet_magic_ok: true", r.stdout)
+            self.assertIn("footer_length_bytes: 0", r.stdout)
 
 
 if __name__ == "__main__":

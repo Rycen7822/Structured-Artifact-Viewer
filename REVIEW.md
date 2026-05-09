@@ -2,7 +2,7 @@
 
 ## Scope
 
-This plugin packages a compact local CLI plus a short Codex skill. It targets JSON, JSONL/NDJSON, CSV, TSV, and generated tool artifacts. It does not provide an MCP server.
+This plugin packages a compact local CLI plus a short Codex skill. It targets bounded inspection of JSON, JSONL/NDJSON, CSV, TSV, Parquet metadata, and generated tool artifacts. It does not provide an MCP server and is not a `jq` replacement.
 
 ## Review loop summary
 
@@ -52,12 +52,29 @@ Fix:
 - Dynamic paths/globs and large files remain guarded.
 - Added explicit bypass markers for intentional raw reads.
 
+### Pass 5
+
+Issue found: the plugin could be mistaken for a broader JSON processing or
+`jq` replacement, and YAML detection could interfere with ordinary config-file
+reads.
+
+Fix:
+
+- Shortened the skill to inspection-only guidance.
+- Added generic `summary` and `select` commands so agents do not need to choose
+  format-specific commands for common bounded inspection.
+- Added `parquet-summary` for footer/schema metadata only; it does not read row
+  data.
+- Removed YAML/YML from guarded structured suffixes.
+
 ## Known limits
 
 - Codex plugin-local hooks may vary by Codex version/config. The package therefore uses `install-hook` to write a repo/user hook with an absolute script path instead of relying on plugin-local hook discovery.
 - The hook is a guardrail, not a security boundary. Codex hooks do not intercept every possible shell or tool path in every runtime.
 - JSON files larger than the default `--max-file-bytes` are refused unless `--force` is passed. This avoids accidental giant `json.load()` calls.
 - JSONL projection skips oversize physical lines by default. Increase `--max-record-bytes` when intentionally inspecting large records.
+- Parquet schema/row-group details use optional `pyarrow` when available; the
+  standard-library fallback reports footer/magic metadata only.
 
 ## Test status
 
@@ -72,3 +89,6 @@ Validated with standard-library unittest tests covering:
 - oversize JSONL record skipping
 - hook merge idempotence
 - `.codex/bin/codex-view` wrapper installation
+- generic `summary`/`select` dispatch
+- Parquet footer summary
+- YAML/YML guard exclusion

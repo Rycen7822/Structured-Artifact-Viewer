@@ -13,12 +13,13 @@ import json
 import os
 import re
 import shlex
+import struct
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 DEFAULT_MAX_LINES = 80
 DEFAULT_MAX_LINE_CHARS = 240
 DEFAULT_MAX_PREVIEW = 160
@@ -37,8 +38,6 @@ STRUCTURED_SUFFIXES = {
     ".csv",
     ".tsv",
     ".parquet",
-    ".yaml",
-    ".yml",
 }
 STRUCTURED_BASENAME_HINTS = {
     "summary.json",
@@ -323,6 +322,68 @@ def cmd_json_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_json_select(args: argparse.Namespace) -> int:
+    path = Path(args.file)
+    fields = parse_fields(args.fields)
+    out = OutputBudget(args.max_lines, args.max_line_chars)
+    if not path.exists():
+        eprint(f"not found: {path}")
+        return 2
+    size = path.stat().st_size
+    if size > args.max_file_bytes and not args.force:
+        out.emit(f"refused_to_load: file exceeds --max-file-bytes={args.max_file_bytes}; pass --force if intentional")
+        out.close()
+        return 1
+    skipped_large = [f for f in fields if is_large_field(f) and not args.include_large_fields]
+    effective_fields = [f for f in fields if f not in skipped_large]
+    if skipped_large:
+        out.emit(f"skipped_large_fields: {skipped_large}; pass --include-large-fields if intentional")
+    if not effective_fields:
+        out.emit("no_effective_fields: all requested fields are known large fields")
+        out.close()
+        return 1
+    try:
+        with safe_open_text(path) as f:
+            obj = json.load(f)
+    except Exception as exc:
+        eprint(f"json parse error: {exc}")
+        return 1
+
+    def emit_row(label: str, record: Mapping[str, Any]) -> bool:
+        row: dict[str, Any] = {}
+        for field in effective_fields:
+            ok, value = get_nested(record, field)
+            if ok:
+                row[field] = shorten_value(value, args.max_chars)
+        if not row and not args.include_empty:
+            return False
+        if args.as_json:
+            out.emit(json.dumps({"item": label, **row}, ensure_ascii=False, sort_keys=True))
+        else:
+            out.emit(f"{label}: {row}")
+        return True
+
+    emitted = 0
+    if isinstance(obj, Mapping):
+        emit_row("root", obj)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if emitted >= args.limit:
+                break
+            if isinstance(item, Mapping):
+                if emit_row(str(i), item):
+                    emitted += 1
+            elif args.include_empty:
+                out.emit(f"{i}: {preview(item, args.max_chars)}")
+                emitted += 1
+    else:
+        out.emit(f"unsupported_json_type: {type(obj).__name__}; select expects an object or list of objects")
+        out.close()
+        return 1
+    out.close()
+    return 0
+
+
 def cmd_jsonl_summary(args: argparse.Namespace) -> int:
     path = Path(args.file)
     out = OutputBudget(args.max_lines, args.max_line_chars)
@@ -548,6 +609,85 @@ def cmd_csv_project(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_parquet_summary(args: argparse.Namespace) -> int:
+    path = Path(args.file)
+    out = OutputBudget(args.max_lines, args.max_line_chars)
+    if not path.exists():
+        eprint(f"not found: {path}")
+        return 2
+    size = path.stat().st_size
+    out.emit(f"path: {path}")
+    out.emit(f"bytes: {size}")
+    if size < 12:
+        out.emit("parquet_magic_ok: false")
+        out.close()
+        return 1
+    try:
+        with path.open("rb") as f:
+            head = f.read(4)
+            f.seek(-8, os.SEEK_END)
+            footer = f.read(8)
+    except Exception as exc:
+        eprint(f"parquet read error: {exc}")
+        return 1
+    footer_len = struct.unpack("<I", footer[:4])[0]
+    magic_ok = head == b"PAR1" and footer[4:] == b"PAR1"
+    out.emit(f"parquet_magic_ok: {str(magic_ok).lower()}")
+    out.emit(f"footer_length_bytes: {footer_len}")
+    if not magic_ok:
+        out.close()
+        return 1
+
+    try:
+        import pyarrow.parquet as pq  # type: ignore[import-not-found]
+    except Exception:
+        out.emit("column_metadata: unavailable (install pyarrow for schema/row-group metadata)")
+        out.close()
+        return 0
+
+    try:
+        parquet_file = pq.ParquetFile(path)
+        meta = parquet_file.metadata
+        out.emit(f"rows: {meta.num_rows}")
+        out.emit(f"row_groups: {meta.num_row_groups}")
+        out.emit(f"columns: {meta.num_columns}")
+        if meta.created_by:
+            out.emit(f"created_by: {meta.created_by}")
+        names = list(parquet_file.schema_arrow.names)
+        suffix = " ..." if len(names) > args.max_columns else ""
+        out.emit(f"column_names({len(names)}): {names[:args.max_columns]}{suffix}")
+    except Exception as exc:
+        out.emit(f"column_metadata_error: {type(exc).__name__}: {preview(str(exc), args.max_preview)}")
+    out.close()
+    return 0
+
+
+def cmd_summary(args: argparse.Namespace) -> int:
+    suffix = Path(args.file).suffix.lower()
+    if suffix == ".json":
+        return cmd_json_summary(args)
+    if suffix in {".jsonl", ".ndjson"}:
+        return cmd_jsonl_summary(args)
+    if suffix in {".csv", ".tsv"}:
+        return cmd_csv_summary(args)
+    if suffix == ".parquet":
+        return cmd_parquet_summary(args)
+    eprint("unsupported structured summary type; use sniff for a bounded file probe")
+    return 2
+
+
+def cmd_select(args: argparse.Namespace) -> int:
+    suffix = Path(args.file).suffix.lower()
+    if suffix == ".json":
+        return cmd_json_select(args)
+    if suffix in {".jsonl", ".ndjson"}:
+        return cmd_jsonl_project(args)
+    if suffix in {".csv", ".tsv"}:
+        return cmd_csv_project(args)
+    eprint("unsupported structured select type; select supports JSON, JSONL/NDJSON, CSV, and TSV")
+    return 2
+
+
 def looks_structured_path(token: str) -> bool:
     # Strip common redirection and shell quoting residue.
     t = token.strip().strip("'\"")
@@ -558,7 +698,7 @@ def looks_structured_path(token: str) -> bool:
     if any(ch in t for ch in "*$?{}"):
         # Avoid attempting to classify dynamic paths/globs too aggressively.
         # `*.jsonl` should still be treated as risky.
-        if not re.search(r"\.(jsonl?|ndjson|csv|tsv|parquet|ya?ml)(\b|$|['\";,)])", t, re.I):
+        if not re.search(r"\.(jsonl?|ndjson|csv|tsv|parquet)(\b|$|['\";,)])", t, re.I):
             return False
     lower = os.path.basename(t).lower()
     if lower in STRUCTURED_BASENAME_HINTS:
@@ -566,7 +706,7 @@ def looks_structured_path(token: str) -> bool:
     suffix = Path(t).suffix.lower()
     if suffix in STRUCTURED_SUFFIXES:
         return True
-    return bool(re.search(r"\.(jsonl?|ndjson|csv|tsv|parquet|ya?ml)(\b|$|['\";,)])", t, re.I))
+    return bool(re.search(r"\.(jsonl?|ndjson|csv|tsv|parquet)(\b|$|['\";,)])", t, re.I))
 
 
 def tokenize_shell(command: str) -> list[str]:
@@ -668,8 +808,8 @@ def cmd_guard(args: argparse.Namespace) -> int:
     if not risky:
         return 0
     message = (
-        f"Structured Artifact Viewer blocked {reason}. Use `python scripts/codex_view.py sniff FILE`, "
-        f"`json-summary`, `jsonl-summary`, `jsonl-project`, `csv-summary`, or `csv-project` instead. "
+        f"Structured Artifact Viewer blocked {reason}. Use `codex-view summary FILE` "
+        f"or `codex-view select FILE --fields name,status,score --limit 10` instead. "
         f"Bypass only when intentional with CODEX_VIEW_ALLOW_RAW=1 or # codex-view-allow-raw."
     )
     if args.mode == "warn":
@@ -770,9 +910,9 @@ def cmd_install_command(args: argparse.Namespace) -> int:
     print(f"installed command: {sh_target}")
     print(f"installed command: {cmd_target}")
     if args.scope == "repo":
-        print("Use: .codex/bin/codex-view jsonl-summary FILE")
+        print("Use: .codex/bin/codex-view summary FILE")
     else:
-        print("Ensure ~/.local/bin is on PATH, then use: codex-view jsonl-summary FILE")
+        print("Ensure ~/.local/bin is on PATH, then use: codex-view summary FILE")
     return 0
 
 
@@ -800,6 +940,37 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--max-line-probe-bytes", type=int, default=DEFAULT_MAX_LINE_PROBE_BYTES)
     add_common_output_args(sp)
     sp.set_defaults(func=cmd_sniff)
+
+    sp = sub.add_parser("summary", help="Auto-summarize JSON, JSONL, CSV/TSV, or Parquet metadata")
+    sp.add_argument("file")
+    sp.add_argument("--delimiter")
+    sp.add_argument("--scan", type=int, default=DEFAULT_JSONL_SCAN)
+    sp.add_argument("--sample", type=int, default=5)
+    sp.add_argument("--line-check", type=int, default=DEFAULT_JSONL_LINE_CHECK)
+    sp.add_argument("--max-line-probe-bytes", type=int, default=DEFAULT_MAX_LINE_PROBE_BYTES)
+    sp.add_argument("--max-record-bytes", type=int, default=DEFAULT_MAX_JSONL_RECORD_BYTES)
+    sp.add_argument("--max-preview", type=int, default=DEFAULT_MAX_PREVIEW)
+    sp.add_argument("--max-keys", type=int, default=60)
+    sp.add_argument("--max-columns", type=int, default=40)
+    sp.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_JSON_BYTES)
+    sp.add_argument("--force", action="store_true")
+    add_common_output_args(sp)
+    sp.set_defaults(func=cmd_summary)
+
+    sp = sub.add_parser("select", help="Preview selected fields from JSON, JSONL, CSV, or TSV")
+    sp.add_argument("file")
+    sp.add_argument("--fields", required=True, help="comma-separated field names; dotted JSON paths are supported")
+    sp.add_argument("--delimiter")
+    sp.add_argument("--limit", type=int, default=DEFAULT_SAMPLE_LIMIT)
+    sp.add_argument("--max-chars", type=int, default=DEFAULT_MAX_PREVIEW)
+    sp.add_argument("--max-record-bytes", type=int, default=DEFAULT_MAX_JSONL_RECORD_BYTES)
+    sp.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_JSON_BYTES)
+    sp.add_argument("--force", action="store_true")
+    sp.add_argument("--include-large-fields", action="store_true")
+    sp.add_argument("--include-empty", action="store_true")
+    sp.add_argument("--as-json", action="store_true")
+    add_common_output_args(sp)
+    sp.set_defaults(func=cmd_select)
 
     sp = sub.add_parser("json-summary", help="Summarize JSON top-level structure without full dump")
     sp.add_argument("file")
@@ -853,6 +1024,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--as-json", action="store_true")
     add_common_output_args(sp)
     sp.set_defaults(func=cmd_csv_project)
+
+    sp = sub.add_parser("parquet-summary", help="Summarize Parquet footer/schema metadata without reading rows")
+    sp.add_argument("file")
+    sp.add_argument("--max-preview", type=int, default=DEFAULT_MAX_PREVIEW)
+    sp.add_argument("--max-columns", type=int, default=40)
+    add_common_output_args(sp)
+    sp.set_defaults(func=cmd_parquet_summary)
 
     sp = sub.add_parser("guard", help="PreToolUse hook guard; reads Codex hook JSON on stdin")
     sp.add_argument("--mode", choices=["deny", "warn"], default="deny")

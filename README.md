@@ -5,6 +5,7 @@ A local Codex plugin that reduces context waste when inspecting structured artif
 - JSON
 - JSONL / NDJSON
 - CSV / TSV
+- Parquet metadata
 - tool artifact files such as `summary.json`, `verification.json`, `candidate_scores.jsonl`
 
 It bundles:
@@ -12,6 +13,11 @@ It bundles:
 1. A compact CLI: `scripts/codex_view.py`
 2. A short Codex skill: `skills/structured-artifact-inspection/SKILL.md`
 3. An optional repo/user hook installer that blocks high-risk raw structured-file dumps.
+
+It is intentionally only a compact viewer. It is not a search tool, data
+transformation tool, validator, editor, or `jq` replacement. Use `jq` when you
+need exact JSON querying or transformation; use this plugin when the goal is to
+understand shape, sizes, keys, columns, and selected fields without raw dumps.
 
 ## Plugin layout
 
@@ -32,11 +38,17 @@ Codex plugin packaging requires `.codex-plugin/plugin.json`; skills live under `
 python scripts/codex_view.py --help
 python scripts/codex_view.py install-command --scope repo
 python scripts/codex_view.py sniff some_file.json
-python scripts/codex_view.py json-summary some_file.json
-python scripts/codex_view.py jsonl-summary some_file.jsonl
-python scripts/codex_view.py jsonl-project some_file.jsonl --fields name,status,score,path --limit 10
+python scripts/codex_view.py summary some_file.json
+python scripts/codex_view.py summary some_file.jsonl
+python scripts/codex_view.py select some_file.jsonl --fields name,status,score,path --limit 10
 python -m unittest discover -s tests
 ```
+
+`summary` automatically dispatches JSON, JSONL/NDJSON, CSV/TSV, and Parquet
+metadata. `select` previews selected fields from JSON, JSONL/NDJSON, CSV, and
+TSV. Older typed commands such as `json-summary`, `jsonl-summary`,
+`jsonl-project`, `csv-summary`, and `csv-project` remain available for
+compatibility.
 
 ## Install as a repo-local Codex plugin
 
@@ -62,7 +74,7 @@ python plugins/structured-artifact-viewer/scripts/codex_view.py install-command 
 python plugins/structured-artifact-viewer/scripts/codex_view.py install-hook --scope repo --mode deny
 ```
 
-`install-command` creates `.codex/bin/codex-view`. `install-hook` writes/updates `.codex/hooks.json` with an absolute command path to this script. The hook blocks high-risk commands such as:
+`install-command` creates `.codex/bin/codex-view`. `install-hook` writes/updates `.codex/hooks.json` with an absolute command path to this script. The hook blocks high-risk raw-output commands such as:
 
 ```bash
 cat artifact.json
@@ -70,6 +82,9 @@ head -20 huge.jsonl
 sed -n '1,80p' candidate_scores.jsonl
 python -m json.tool summary.json
 ```
+
+The hook is deliberately narrow. It avoids intercepting normal `jq` queries or
+general data-processing commands; it is meant to stop accidental raw dumps.
 
 Bypass only when raw output is intentional:
 
