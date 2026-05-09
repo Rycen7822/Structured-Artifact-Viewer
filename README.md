@@ -1,48 +1,111 @@
-# Structured Artifact Viewer for Codex
+<div align="center">
 
-A local Codex plugin that reduces context waste when inspecting unknown-size,
-large, generated, or high-output structured artifacts:
+# Structured Artifact Viewer
 
-- JSON
-- JSONL / NDJSON
-- CSV / TSV
-- Parquet metadata
-- tool artifact files such as `summary.json`, `verification.json`, `candidate_scores.jsonl`
+**Low-context JSON / JSONL / CSV artifact viewer for Codex that avoids raw dumps and context waste.**
 
-It bundles:
+Inspect unknown-size, large, generated, or high-output structured artifacts
+before `cat`, `head`, `sed`, or pretty-printers flood the model context.
 
-1. A single low-context MCP tool: `structured_artifact_viewer`
-2. A compact CLI fallback: `scripts/codex_view.py`
-3. A short Codex skill: `skills/structured-artifact-inspection/SKILL.md`
-4. An optional repo/user hook installer that blocks high-risk raw structured-file dumps.
+</div>
 
-It is intentionally only a compact viewer. It is not a search tool, data
-transformation tool, validator, editor, or `jq` replacement. Use `jq` when you
-need exact JSON querying or transformation; use this plugin when the goal is to
-understand shape, sizes, keys, columns, and selected fields without raw dumps.
-For small known files, especially ordinary config files, direct reads are often
-simpler and cheaper.
+<br/>
 
-## Plugin layout
+<p align="center">
+  <a href="README.md"><img src="https://img.shields.io/badge/Docs-README-f5c542?style=for-the-badge" alt="Docs"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-2ea44f?style=for-the-badge" alt="License"></a>
+  <a href="https://github.com/Rycen7822/Structured-Artifact-Viewer/releases"><img src="https://img.shields.io/badge/Download-Releases-0969da?style=for-the-badge" alt="Releases"></a>
+  <a href=".mcp.json"><img src="https://img.shields.io/badge/MCP-single%20tool-2ea44f?style=for-the-badge" alt="MCP"></a>
+  <a href="rust-version/README.md"><img src="https://img.shields.io/badge/Runtime-Python%20%7C%20Rust-blue?style=for-the-badge" alt="Runtime"></a>
+</p>
 
-```text
-structured-artifact-viewer/
-  .codex-plugin/plugin.json
-  .mcp.json
-  bin/structured-artifact-mcp-server
-  skills/structured-artifact-inspection/SKILL.md
-  scripts/codex_view.py
-  scripts/structured_artifact_mcp.py
-  tests/test_codex_view.py
-  examples/marketplace.repo.example.json
+> Structured Artifact Viewer is meant for unknown-size, large, generated, or
+> high-output structured artifacts. For small known config files, direct bounded
+> reads are usually simpler. For exact JSON queries or transformations, use
+> `jq`; this plugin is a compact inspection layer, not a `jq` replacement.
+
+## Why
+
+Codex often wastes context when it inspects structured artifacts with raw shell
+commands:
+
+- `cat verification.json` can dump tens of thousands of lines.
+- `head -20 candidate_scores.jsonl` can still print huge records.
+- `python -m json.tool status.json` can expand compact JSON into repeated large output.
+- CSV, TSV, and generated tool artifacts often need shape and selected fields,
+  not the full payload.
+
+This plugin keeps inspection staged and bounded: identify the file shape, inspect
+metadata and previews, then select only the fields or records that matter.
+
+## Features
+
+- Single MCP tool, `structured_artifact_viewer`, to keep Codex tool context small.
+- Compact CLI fallback in `scripts/codex_view.py`.
+- Python implementation for easy local use and plugin packaging.
+- Rust implementation for native binaries and lower runtime overhead.
+- Budgeted summaries for JSON, JSONL / NDJSON, CSV / TSV, and Parquet metadata.
+- Field selection previews for JSON, JSONL / NDJSON, CSV, and TSV.
+- External budget config for prebuilt or copied installations.
+- Optional hook guard to block accidental raw dumps of high-risk structured files.
+
+## Install
+
+| Variant | Best For | Requirements |
+| --- | --- | --- |
+| Repo-local Codex plugin | Normal project use from a copied plugin directory | Codex, Python 3 |
+| Python CLI / MCP | Editable local development and portable source installs | Python 3 |
+| Rust from source | Native CLI / MCP binaries and performance testing | Rust toolchain |
+
+### Repo-Local Plugin
+
+From your repository root:
+
+```bash
+mkdir -p plugins
+cp -R /path/to/structured-artifact-viewer ./plugins/structured-artifact-viewer
+mkdir -p .agents/plugins
+cp ./plugins/structured-artifact-viewer/examples/marketplace.repo.example.json .agents/plugins/marketplace.json
 ```
 
-Codex plugin packaging requires `.codex-plugin/plugin.json`; skills live under
-`skills/`; MCP server registration lives in `.mcp.json`.
+Then restart Codex and enable the plugin from the repo marketplace.
 
-## MCP tool
+### Python Version
 
-The plugin exposes one MCP tool to keep tool-list context small:
+```bash
+python scripts/codex_view.py --help
+python scripts/codex_view.py summary some_file.jsonl
+python scripts/codex_view.py select some_file.jsonl --fields name,status,score --limit 10
+printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' | python scripts/structured_artifact_mcp.py
+```
+
+### Rust Version
+
+```bash
+cd rust-version
+cargo build --release
+target/release/codex-view --help
+target/release/codex-view summary ../some_file.jsonl
+target/release/structured-artifact-mcp-server
+```
+
+See [rust-version/README.md](rust-version/README.md) for Rust parity and
+verification details.
+
+## How It Works
+
+Use the plugin as a staged inspection flow:
+
+1. `sniff` detects file type, size, and risk signals.
+2. `summary` reports bounded shape, keys, columns, sample records, and truncation notes.
+3. `select` previews specific fields or columns from bounded records.
+4. Use direct reads, `jq`, or domain tools only after the relevant path or field is known.
+
+The goal is to spend terminal output on decisions, not on full artifact payloads.
+
+## MCP Operations
+
+The plugin exposes one MCP tool:
 
 ```text
 structured_artifact_viewer
@@ -54,6 +117,13 @@ Input shape:
 {"op": "sniff|summary|select|self_check", "args": {"path": "FILE"}}
 ```
 
+| Operation | Purpose |
+| --- | --- |
+| `sniff` | Detect type, size, extension, and whether raw output is risky. |
+| `summary` | Return bounded metadata, keys, columns, examples, and truncation status. |
+| `select` | Preview selected JSON fields or table columns with a record limit. |
+| `self_check` | Verify the tool can run in the current environment. |
+
 Examples:
 
 ```json
@@ -61,10 +131,36 @@ Examples:
 {"op": "select", "args": {"path": "candidate_scores.jsonl", "fields": ["name", "status", "score"], "limit": 10}}
 ```
 
-The schema intentionally does not list every CLI flag. The stable path is:
-`sniff`, then `summary`, then `select`.
+The schema intentionally stays compact instead of listing every CLI flag. The
+stable agent path is `sniff` -> `summary` -> `select`.
 
-## Budget configuration
+## CLI
+
+The generic commands automatically dispatch across JSON, JSONL / NDJSON, CSV /
+TSV, and Parquet metadata:
+
+```bash
+python scripts/codex_view.py sniff some_file.json
+python scripts/codex_view.py summary some_file.json
+python scripts/codex_view.py summary some_file.jsonl
+python scripts/codex_view.py select some_file.jsonl --fields name,status,score,path --limit 10
+```
+
+Compatibility commands remain available:
+
+```text
+json-summary
+jsonl-summary
+jsonl-project
+csv-summary
+csv-project
+parquet-summary
+guard
+install-hook
+install-command
+```
+
+## Budget Configuration
 
 The CLI and MCP server can load default limit values from external config files.
 Command-line flags still have the highest priority.
@@ -97,47 +193,18 @@ allow_small_bytes = 16384
 ```
 
 The config is intentionally limited to budget values. It does not enable
-`--force` or other behavior-changing flags. JSON config files are also
-accepted; TOML is the recommended format.
+`--force` or other behavior-changing flags. JSON config files are also accepted;
+TOML is the recommended format.
 
-## Quick test without installing as a plugin
+## Optional Hook Guard
 
-```bash
-python scripts/codex_view.py --help
-python scripts/codex_view.py --config .codex/structured-artifact-viewer.toml summary some_file.jsonl
-python scripts/codex_view.py install-command --scope repo
-printf '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}\n' | python scripts/structured_artifact_mcp.py
-python scripts/codex_view.py sniff some_file.json
-python scripts/codex_view.py summary some_file.json
-python scripts/codex_view.py summary some_file.jsonl
-python scripts/codex_view.py select some_file.jsonl --fields name,status,score,path --limit 10
-python -m unittest discover -s tests
+The MCP tool and CLI are the primary stable paths. Hooks add enforcement when
+your Codex version/config supports them. If required, enable:
+
+```toml
+[features]
+codex_hooks = true
 ```
-
-`summary` automatically dispatches JSON, JSONL/NDJSON, CSV/TSV, and Parquet
-metadata. `select` previews selected fields from JSON, JSONL/NDJSON, CSV, and
-TSV. Older typed commands such as `json-summary`, `jsonl-summary`,
-`jsonl-project`, `csv-summary`, and `csv-project` remain available for
-compatibility.
-
-## Install as a repo-local Codex plugin
-
-From your repository root:
-
-```bash
-mkdir -p plugins
-cp -R /path/to/structured-artifact-viewer ./plugins/structured-artifact-viewer
-mkdir -p .agents/plugins
-cp ./plugins/structured-artifact-viewer/examples/marketplace.repo.example.json .agents/plugins/marketplace.json
-```
-
-Then restart Codex and install/enable the plugin from the repo marketplace.
-
-## Optional hook guard
-
-The MCP tool and CLI are the primary stable paths. Hooks add enforcement but are
-version/config dependent. If your Codex version/config requires it, ensure
-`[features].codex_hooks = true`.
 
 After copying the plugin into a repository, run:
 
@@ -146,7 +213,7 @@ python plugins/structured-artifact-viewer/scripts/codex_view.py install-command 
 python plugins/structured-artifact-viewer/scripts/codex_view.py install-hook --scope repo --mode deny
 ```
 
-`install-command` creates `.codex/bin/codex-view`. `install-hook` writes/updates `.codex/hooks.json` with an absolute command path to this script. The hook blocks high-risk raw-output commands such as:
+The hook blocks high-risk raw-output commands such as:
 
 ```bash
 cat artifact.json
@@ -156,19 +223,50 @@ python -m json.tool summary.json
 ```
 
 The hook is deliberately narrow. It avoids intercepting normal `jq` queries or
-general data-processing commands; it is meant to stop accidental raw dumps.
-
-Bypass only when raw output is intentional:
+general data-processing commands. Bypass only when raw output is intentional:
 
 ```bash
 CODEX_VIEW_ALLOW_RAW=1 cat small.json
 # or add: # codex-view-allow-raw
 ```
 
-## Why MCP plus CLI plus hook
+## Project Layout
 
-The MCP tool gives Codex a small, stable interface for bounded inspection
-without teaching it long CLI usage. The CLI remains useful for direct shell use
-and as a fallback when MCP is unavailable. The optional hook provides
-deterministic enforcement against accidental raw dumps when supported by your
-Codex version/config.
+| Path | Purpose |
+| --- | --- |
+| `.codex-plugin/plugin.json` | Codex plugin manifest and user-facing metadata. |
+| `.mcp.json` | MCP server registration for the single tool. |
+| `bin/structured-artifact-mcp-server` | Plugin entrypoint wrapper. |
+| `skills/structured-artifact-inspection/SKILL.md` | Short Codex usage guidance. |
+| `scripts/codex_view.py` | Python CLI and core inspection logic. |
+| `scripts/structured_artifact_mcp.py` | Python MCP stdio server. |
+| `rust-version/` | Rust CLI / MCP implementation and parity checks. |
+| `tests/` | Python tests. |
+| `examples/` | Repo marketplace example. |
+
+## Development
+
+Python checks:
+
+```bash
+python -m unittest discover -s tests
+```
+
+Rust checks:
+
+```bash
+cd rust-version
+cargo fmt --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+cargo build
+python3 scripts/compare_python.py
+```
+
+## Notes
+
+- Use this plugin before reading structured artifacts whose size or record shape
+  is unknown.
+- Keep using `jq` for exact JSON queries, filters, and transformations.
+- Small known files do not need the plugin by default.
+- The hook is a guardrail against accidental output floods, not a security boundary.
